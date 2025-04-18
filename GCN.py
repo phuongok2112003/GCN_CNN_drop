@@ -8,7 +8,6 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 import random
 
-# === 1. Đặt seed để đảm bảo tính nhất quán ===
 def set_seed(seed=42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -19,40 +18,71 @@ def set_seed(seed=42):
 
 set_seed(42)
 
-# === 2. Định nghĩa mô hình GCN cho cả node và edge ===
+
+def build_edge_index_line(edge_index, max_edges_per_node=100):
+  
+    # Chuyển edge_index từ [2, num_edges] thành [num_edges, 2]
+    edge_index = edge_index.t()
+    num_edges = edge_index.shape[0]
+
+    # Bước 1: Lập bản đồ từ đỉnh → các cạnh liên quan
+    node_to_edges = dict()
+    for eid, (u, v) in enumerate(edge_index.tolist()):
+        for node in (u, v):
+            if node not in node_to_edges:
+                node_to_edges[node] = []
+            node_to_edges[node].append(eid)
+
+    # Bước 2: Tạo các cặp cạnh chia sẻ đỉnh (mỗi cặp sẽ là một cạnh trong line graph)
+    edge_pairs = set()
+    for edges in node_to_edges.values():
+        # Giới hạn số lượng cạnh trên mỗi đỉnh để tránh quá tải bộ nhớ
+        if len(edges) > max_edges_per_node:
+            edges = edges[:max_edges_per_node]
+        for i in range(len(edges)):
+            for j in range(i + 1, len(edges)):
+                e1, e2 = edges[i], edges[j]
+                edge_pairs.add((e1, e2))
+                edge_pairs.add((e2, e1))  # vì đồ thị vô hướng
+
+    # Bước 3: Tạo edge_index_line mới từ các cặp cạnh
+    if edge_pairs:
+        src, dst = zip(*edge_pairs)
+        edge_index_line = torch.tensor([src, dst], dtype=torch.long)
+    else:
+        edge_index_line = torch.empty((2, 0), dtype=torch.long)
+
+    return edge_index_line
+
+
+# === 2. Định nghĩa mô hình GCN ===
 class GraphModel(nn.Module):
     def __init__(self, node_input_dim, node_hidden_dim, node_output_dim, 
                  edge_input_dim, edge_hidden_dim, edge_output_dim):
         super(GraphModel, self).__init__()
-        
-        # GCN cho node
+
         self.node_gcn1 = GCNConv(node_input_dim, node_hidden_dim)
         self.node_gcn2 = GCNConv(node_hidden_dim, node_output_dim)
-        
-        # GCN cho edge
+
         self.edge_gcn1 = GCNConv(edge_input_dim, edge_hidden_dim)
         self.edge_gcn2 = GCNConv(edge_hidden_dim, edge_output_dim)
 
-        # Fully Connected để kết hợp node & edge
         self.fc = nn.Linear(node_output_dim + edge_output_dim, node_output_dim)
 
     def forward(self, data):
-        # 🔹 Trích xuất đặc trưng từ node bằng GCN
         node_features = F.sigmoid(self.node_gcn1(data.x, data.edge_index))
         node_features = self.node_gcn2(node_features, data.edge_index)
 
-        # 🔹 Trích xuất đặc trưng từ edge bằng GCN
         if data.edge_attr is not None:
-            edge_features = F.sigmoid(self.edge_gcn1(data.edge_attr, data.edge_index))
-            edge_features = self.edge_gcn2(edge_features, data.edge_index)
+            edge_index_line = build_edge_index_line(data.edge_index)
+            edge_features = F.sigmoid(self.edge_gcn1(data.edge_attr, edge_index_line))
+            edge_features = self.edge_gcn2(edge_features, edge_index_line)
         else:
             edge_features = torch.zeros((data.edge_index.shape[1], 16), device=data.x.device)
 
-        # 🔹 Pooling để gom đặc trưng của node và edge thành vector đại diện cho đồ thị
         node_representation = global_mean_pool(node_features, data.batch)
         edge_representation = global_mean_pool(edge_features, data.batch[data.edge_index[0]])
 
-        # 🔹 Kết hợp đặc trưng của node & edge
         graph_representation = torch.cat([node_representation, edge_representation], dim=-1)
         graph_representation = self.fc(graph_representation)
 

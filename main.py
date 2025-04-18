@@ -31,12 +31,12 @@ clf.fit(X_train, y_train)
 
 
 # Lưu model vào file
-joblib.dump(clf, "random_forest_model.pkl")
+joblib.dump(clf, "gcn_drop_rf.pkl")
 print("✅ Model saved successfully!")
 
 
 # === 8. Evaluate Model ===
-clf_loaded = joblib.load("random_forest_model.pkl")
+clf_loaded = joblib.load("gcn_drop_rf.pkl")
 
 # Dự đoán trên tập test
 y_pred = clf_loaded.predict(X_test)
