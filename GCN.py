@@ -7,6 +7,7 @@ from imblearn.over_sampling import SMOTE
 import numpy as np
 from sklearn.model_selection import train_test_split
 import random
+import os
 
 def set_seed(seed=42):
     torch.manual_seed(seed)
@@ -21,11 +22,11 @@ set_seed(42)
 
 def build_edge_index_line(edge_index, max_edges_per_node=100):
   
-    # Chuyển edge_index từ [2, num_edges] thành [num_edges, 2]
+ 
     edge_index = edge_index.t()
     num_edges = edge_index.shape[0]
 
-    # Bước 1: Lập bản đồ từ đỉnh → các cạnh liên quan
+   
     node_to_edges = dict()
     for eid, (u, v) in enumerate(edge_index.tolist()):
         for node in (u, v):
@@ -33,19 +34,19 @@ def build_edge_index_line(edge_index, max_edges_per_node=100):
                 node_to_edges[node] = []
             node_to_edges[node].append(eid)
 
-    # Bước 2: Tạo các cặp cạnh chia sẻ đỉnh (mỗi cặp sẽ là một cạnh trong line graph)
+
     edge_pairs = set()
     for edges in node_to_edges.values():
-        # Giới hạn số lượng cạnh trên mỗi đỉnh để tránh quá tải bộ nhớ
+  
         if len(edges) > max_edges_per_node:
             edges = edges[:max_edges_per_node]
         for i in range(len(edges)):
             for j in range(i + 1, len(edges)):
                 e1, e2 = edges[i], edges[j]
                 edge_pairs.add((e1, e2))
-                edge_pairs.add((e2, e1))  # vì đồ thị vô hướng
+                edge_pairs.add((e2, e1)) 
 
-    # Bước 3: Tạo edge_index_line mới từ các cặp cạnh
+  
     if edge_pairs:
         src, dst = zip(*edge_pairs)
         edge_index_line = torch.tensor([src, dst], dtype=torch.long)
@@ -55,7 +56,7 @@ def build_edge_index_line(edge_index, max_edges_per_node=100):
     return edge_index_line
 
 
-# === 2. Định nghĩa mô hình GCN ===
+
 class GraphModel(nn.Module):
     def __init__(self, node_input_dim, node_hidden_dim, node_output_dim, 
                  edge_input_dim, edge_hidden_dim, edge_output_dim):
@@ -88,13 +89,13 @@ class GraphModel(nn.Module):
 
         return graph_representation
 
-# === 3. Load dữ liệu đồ thị ===
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 graphs = torch.load('graphs.pt',weights_only=False)
 
 print("Số lượng đồ thị:", len(graphs))
 
-# Cân bằng dữ liệu
+
 graphs_0 = [g for g in graphs if g.y.item() == 0]
 graphs_1 = [g for g in graphs if g.y.item() == 1]
 min_size = min(len(graphs_0), len(graphs_1))
@@ -105,20 +106,42 @@ remaining_graphs = graphs_0[min_size:] + graphs_1[min_size:]
 random.shuffle(balanced_graphs)
 random.shuffle(remaining_graphs)
 
-# === 4. Chia Train/Test ===
+
 print("Chia tập train (80%) và test (20%)...")
 train_graphs, test_graphs = train_test_split(
     balanced_graphs, test_size=0.2, random_state=42, stratify=[g.y.item() for g in balanced_graphs]
 )
 
-# Thêm dữ liệu dư vào tập train và test
+
 train_graphs += remaining_graphs[:18000]
 test_graphs += remaining_graphs[18000:]
 
-# === 5. Trích xuất đặc trưng từ mô hình ===
+WEIGHT_PATH = "GCN_smote_weights.pth"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def save_fixed_weights(model):
+  
+    torch.save(model.state_dict(), WEIGHT_PATH)
+    print(f"✅ Đã lưu trọng số cố định vào '{WEIGHT_PATH}'.")
+
+def load_fixed_weights(model):
+    """Tải trọng số cố định nếu đã có file."""
+    if os.path.exists(WEIGHT_PATH):
+        model.load_state_dict(torch.load(WEIGHT_PATH, map_location=device))
+        model.eval() 
+        print(f"✅ Đã tải trọng số cố định từ '{WEIGHT_PATH}'.")
+    else:
+        print("⚠️ Chưa có file trọng số, cần lưu trước!")
+
 model = GraphModel(node_input_dim=50, node_hidden_dim=64, node_output_dim=32,
                    edge_input_dim=50, edge_hidden_dim=32, edge_output_dim=16).to(device)
-model.eval()
+
+if not os.path.exists(WEIGHT_PATH):
+    print(" Lưu trọng số cố định lần đầu...")
+    save_fixed_weights(model)
+else:
+    print(" Đang tải trọng số cố định...")
+    load_fixed_weights(model)
 
 def extract_features(graphs):
     loader = DataLoader(graphs, batch_size=1, shuffle=False)
@@ -136,18 +159,18 @@ def extract_features(graphs):
     y = np.hstack(labels)
     return X, y
 
-# Trích xuất đặc trưng cho tập train và test
+
 X_train, y_train = extract_features(train_graphs)
 X_test, y_test = extract_features(test_graphs)
 print(X_train.shape)
-# === 6. Cân bằng tập train bằng SMOTE ===
+
 smote = SMOTE(random_state=42)
 X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
 
 print("Trước SMOTE:", np.bincount(y_train))
 print("Sau SMOTE:", np.bincount(y_train_resampled))
 
-# === 7. Chuyển lại thành dữ liệu đồ thị PyG ===
+
 def convert_to_graphs(X, y):
     new_graphs = []
     for i in range(len(X)):
@@ -161,7 +184,7 @@ def convert_to_graphs(X, y):
 train_graphs_resampled = convert_to_graphs(X_train_resampled, y_train_resampled)
 test_graphs_final = convert_to_graphs(X_test, y_test)
 
-# === 8. Lưu dữ liệu sau khi xử lý ===
+
 torch.save(train_graphs_resampled, 'train_graphs.pt')
 torch.save(test_graphs_final, 'test_graphs.pt')
 print("Đã lưu train_graphs.pt và test_graphs.pt.")

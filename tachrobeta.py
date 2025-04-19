@@ -7,13 +7,13 @@ from transformers import RobertaModel, RobertaTokenizer
 import numpy as np
 import re
 
-# Namespace cho GraphML
+
 NAMESPACE = {"ns": "http://graphml.graphdrawing.org/xmlns"}
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🔹 Đang sử dụng thiết bị: {device}")
 
-# Load RoBERTa Model & Tokenizer
+
 tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
 roberta_model = RobertaModel.from_pretrained("roberta-base").to(device)
 roberta_model.eval()
@@ -73,7 +73,7 @@ def load_all_graphs(base_path):
                 graphs.append(graph)
     return graphs
 
-# Load và lưu dữ liệu
+
 base_path = "Z:\\output"
 graphs = load_all_graphs(base_path)
 
